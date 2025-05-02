@@ -112,42 +112,33 @@ function buildGraph(allowedSet) {
   graphLayer.selectAll('*').remove();
   hullLayer.selectAll('*').remove();
 
-    // ---- 5b) Filter + (shallow‑)clone nodes/links for D3 ----
+  // ---- 5b) Filter + (shallow‑)clone nodes/links for D3 ----
   const includeAll = (allowedSet === null);
-  let allowedReal = null;
-  if (!includeAll) {
-    allowedReal = new Set();
-    // Map requested IDs (case‑insensitive) to whatever spelling exists in data
-    fullNodes.forEach(n => {
-      if (allowedSet.has(n.id) || allowedSet.has(n.id.toLowerCase())) {
-        allowedReal.add(n.id);
-      } else {
-        // secondary check: lowercase comparison against preset entries
-        for (const name of allowedSet) {
-          if (name.toLowerCase() === n.id.toLowerCase()) {
-            allowedReal.add(n.id);
-            break;
-          }
-        }
-      }
+  let nodes = [];
+  let links = [];
+
+  if (includeAll) {
+    nodes = fullNodes.map(d => ({ ...d }));
+    const nodeMap = new Map(nodes.map(n => [n.id, n]));
+    links = fullLinks.filter(l => nodeMap.has(l.source) && nodeMap.has(l.target)).map(d => ({ ...d }));
+  } else {
+    // Build a quick map from lower‑case id → canonical id for lookup
+    const lowerToId = new Map(fullNodes.map(n => [n.id.toLowerCase(), n.id]));
+    const allowedIds = new Set();
+    allowedSet.forEach(name => {
+      const real = lowerToId.get(name.toLowerCase());
+      if (real) allowedIds.add(real);
     });
+    if (allowedIds.size === 0) return; // nothing matches preset
+
+    nodes = fullNodes.filter(n => allowedIds.has(n.id)).map(d => ({ ...d }));
+    links = fullLinks.filter(l => allowedIds.has(l.source) && allowedIds.has(l.target)).map(d => ({ ...d }));
   }
 
-  const nodes = includeAll
-    ? fullNodes.map(d => ({ ...d }))
-    : fullNodes.filter(n => allowedReal.has(n.id)).map(d => ({ ...d }));
-
-  const nodeMap = new Map(nodes.map(n => [n.id, n]));
-  const links = includeAll
-    ? fullLinks.filter(l => nodeMap.has(l.source) && nodeMap.has(l.target)).map(d => ({ ...d }))
-    : fullLinks.filter(l => allowedReal.has(l.source) && allowedReal.has(l.target)).map(d => ({ ...d }));
-
-  if (nodes.length === 0) return; // nothing to draw // nothing to draw
+  if (nodes.length === 0) return; // nothing to draw
 
   // ---- 5c) Restore saved node positions (if any) for *full* graph only ----
-  if (allowedSet === null) {
-    restoreNodePositions(nodes);
-  }
+  if (includeAll) restoreNodePositions(nodes);
 
   // ---- 5d) Create elements ----
   const linkSel = graphLayer.selectAll('.link')
@@ -182,10 +173,9 @@ function buildGraph(allowedSet) {
     .force('charge', d3.forceManyBody().strength(-maxdim/2).distanceMax(maxdim*0.25))
     .force('center', d3.forceCenter(width/2,height/2).strength(0.1))
     .on('tick', ticked)
-    .on('end', () => { if (allowedSet===null) saveNodePositions(nodes); });
+    .on('end', () => { if (includeAll) saveNodePositions(nodes); });
 
-  // For saved positions we want to run a few iterations to settle overlaps
-  if (allowedSet===null) currentSim.alpha(0.3).restart();
+  if (includeAll) currentSim.alpha(0.3).restart();
 
   //-----------------------------------------------------------------------
   // 5f) Tick handler
@@ -203,8 +193,8 @@ function buildGraph(allowedSet) {
       .attr('x', d=>d.x)
       .attr('y', d=>d.y);
 
-    // ---- Hulls only for full view (for clarity) ----
-    if (allowedSet !== null) return;
+    // ---- Hulls only for full view ----
+    if (!includeAll) return;
 
     const groups = d3.group(nodes.filter(n=>n.tag), n=>n.tag);
     const hullData = [];
@@ -213,4 +203,55 @@ function buildGraph(allowedSet) {
       const pts = [];
       const step = Math.PI/36;
       arr.forEach(d => {
-        for (let a=0;a<2*Math.PI;a+=step) pts.push([d.x+visualMargin*Math.cos
+        for (let a=0;a<2*Math.PI;a+=step) pts.push([d.x+visualMargin*Math.cos(a), d.y+visualMargin*Math.sin(a)]);
+      });
+      const hull = d3.polygonHull(pts);
+      if (hull) hullData.push({ tag, hull });
+    });
+
+    const hullSel = hullLayer.selectAll('path').data(hullData, d=>d.tag);
+    hullSel.enter().append('path')
+      .attr('class', d=>'hull '+d.tag.toLowerCase().replace(/\s+/g,'-'))
+      .merge(hullSel)
+      .attr('d', d=>'M'+d.hull.join('L')+'Z')
+      .style('fill', d=>groupColors[d.tag.toLowerCase()] || '#ccc')
+      .style('opacity', 0.3);
+    hullSel.exit().remove();
+  }
+
+  //-----------------------------------------------------------------------
+  // 5g) Drag handlers
+  //-----------------------------------------------------------------------
+  function dragStarted(event,d) {
+    if (!event.active) currentSim.alphaTarget(0.3).restart();
+    d.fx = d.x; d.fy = d.y;
+  }
+  function dragged(event,d){ d.fx = event.x; d.fy = event.y; }
+  function dragEnded(event,d){
+    if(!event.active) currentSim.alphaTarget(0);
+    d.fx = null; d.fy = null;
+    if(includeAll) saveNodePositions(nodes);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 6) Persistence helpers
+// ---------------------------------------------------------------------------
+function saveNodePositions(nodes){
+  sessionStorage.setItem('nodePositions', JSON.stringify(nodes.map(n=>({id:n.id,x:n.x,y:n.y,fx:n.fx,fy:n.fy}))));
+}
+function restoreNodePositions(nodes){
+  const saved=sessionStorage.getItem('nodePositions');
+  if(!saved) return;
+  try{
+    const m=new Map(JSON.parse(saved).map(p=>[p.id,p]));
+    nodes.forEach(n=>{
+      const p=m.get(n.id);
+      if(p){ n.x=p.x; n.y=p.y; n.fx=p.fx; n.fy=p.fy; }
+    });
+  }catch(e){}
+}
+
+</script>
+</body>
+</html>
