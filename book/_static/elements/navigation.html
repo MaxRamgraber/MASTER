@@ -145,24 +145,90 @@ function restoreNodePositions(nodes) {
   }
 }
 
-/* ---------- 3) get data then build the graph ---------- */
-loadGraphData(maxdim).then(({ nodes, links }) => {
+// ----------------------------------
+// 5) Fetch references and tags
+// ----------------------------------
+Promise.all([
+  fetch('https://maxramgraber.github.io/MASTER/main/references.txt').then(response => response.text()),
+  fetch('https://maxramgraber.github.io/MASTER/main/tags.txt').then(response => response.text())
+])
+.then(([refData, tagData]) => {
+  // Parse tags.txt into a map: filename -> tag.
+  const tagMap = new Map();
+  tagData.trim().split('\n').forEach(line => {
+    // Expected format: "filename.md -> [tag: 'tag value']"
+    const m = line.match(/^(.*?) -> \[tag:\s*'(.*?)'\]$/);
+    if (m) {
+      tagMap.set(m[1].trim(), m[2].trim());
+    }
+  });
+  
+  // Parse references.txt
+  const lines = refData.trim().split('\n');
+  const nodesMap = new Map();
+  const links = [];
+  const referenceCounts = new Map();
 
-  // 6) Optionally restore positions – keep your restoreNodePositions call
-  const hadSaved = restoreNodePositions(nodes);
+  lines.forEach(line => {
+    // Expected format: "source.md -> [text: 'Display'] [target: 'target']"
+    const match = line.match(/^(.*?) -> \[text: '(.*?)'\] \[target: '(.*?)'\]$/);
+    if (match) {
+      const sourceFile = match[1].trim();
+      const displayText = match[2].trim();
+      const target = match[3].trim();
 
-  const simulation = d3.forceSimulation(nodes)
-      .force("link", d3.forceLink(links).id(d => d.id).distance(maxdim*0.1))
-      .force("charge", d3.forceManyBody().strength(-maxdim/2).distanceMax(maxdim*0.25))
-      .force("center", d3.forceCenter(width/2, height/2).strength(0.1))
-      .on("tick", ticked)
-      .on("end", () => saveNodePositions(nodes));
+      if (!nodesMap.has(sourceFile)) {
+        nodesMap.set(sourceFile, {
+          id: sourceFile,
+          text: extractTitle(sourceFile),
+          link: `https://maxramgraber.github.io/MASTER/main/pages/${sourceFile.replace('.md', '.html')}`
+        });
+      }
+      if (!nodesMap.has(target + '.md')) {
+        nodesMap.set(target + '.md', {
+          id: target + '.md',
+          text: extractTitle(target),
+          link: `https://maxramgraber.github.io/MASTER/main/pages/${target}.html`
+        });
+      }
 
-  if (hadSaved) simulation.alpha(0.3).restart();
+      links.push({ source: sourceFile, target: target + '.md' });
 
-  // build links, nodes, labels, drag handlers, hulls … (all original code)
+      referenceCounts.set(target + '.md', (referenceCounts.get(target + '.md') || 0) + 1);
+      referenceCounts.set(sourceFile, (referenceCounts.get(sourceFile) || 0) + 1);
+    }
+  });
 
-});
+  // Add nodes from tags.txt that are not in references.txt.
+  tagMap.forEach((tag, filename) => {
+    if (!nodesMap.has(filename)) {
+      nodesMap.set(filename, { 
+        id: filename,
+        text: extractTitle(filename),
+        link: `https://maxramgraber.github.io/MASTER/main/pages/${filename.replace('.md', '.html')}`,
+        tag: tag
+      });
+      referenceCounts.set(filename, 0);
+    }
+  });
+
+  // Build the final list of nodes
+  const nodes = Array.from(nodesMap.values());
+  // Ensure each node has its tag property if available.
+  nodes.forEach(node => {
+    if (!node.tag && tagMap.has(node.id)) {
+      node.tag = tagMap.get(node.id);
+    }
+  });
+
+  // Assign node radii based on reference counts
+  const minRadius = maxdim * 0.01;
+  const maxRadius = maxdim * 0.01;
+  const maxReferences = 10;
+  nodes.forEach(node => {
+    const count = referenceCounts.get(node.id) || 0;
+    node.radius = minRadius + (maxRadius - minRadius) * Math.min(count / maxReferences, 1);
+  });
 
   // ----------------------------------
   // 6) Optionally restore positions
