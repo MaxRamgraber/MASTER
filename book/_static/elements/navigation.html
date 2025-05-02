@@ -78,7 +78,7 @@ const visualMargin = maxdim * 0.025;
 // ---------------------------------------------------------------------------
 const filterSets = {
   all: null,
-  cegm1000: new Set(['probability_density_function','linear_transformation','linear_regression','gaussian_pdf','matrix_multiplication']),
+  cegm1000: new Set(['probability_density_function','linear_transformation','gaussian_pdf','matrix_multiplication','linear_regression']]),
   cegm2005: new Set(['random_variable','probability_distribution'])
 };
 
@@ -188,8 +188,7 @@ function buildGraph(allowedSet) {
       .attr('x', d=>d.x)
       .attr('y', d=>d.y);
 
-    // ---- Hulls only for full view ----
-    if (!includeAll) return;
+    
 
     const groups = d3.group(nodes.filter(n=>n.tag), n=>n.tag);
     const hullData = [];
