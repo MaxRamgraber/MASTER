@@ -112,30 +112,25 @@ function buildGraph(allowedSet) {
   graphLayer.selectAll('*').remove();
   hullLayer.selectAll('*').remove();
 
-  // ---- 5b) Filter + (shallow‑)clone nodes/links for D3 ----
+    // ---- 5b) Filter + (shallow‑)clone nodes/links for D3 ----
   const includeAll = (allowedSet === null);
-  let nodes = [];
-  let links = [];
+  let nodes = [], links = [];
+
+  // cleaning helper: lower‑case + strip ".md" if present
+  const clean = id => id.toLowerCase().replace(/\.md$/,'');
 
   if (includeAll) {
     nodes = fullNodes.map(d => ({ ...d }));
     const nodeMap = new Map(nodes.map(n => [n.id, n]));
     links = fullLinks.filter(l => nodeMap.has(l.source) && nodeMap.has(l.target)).map(d => ({ ...d }));
   } else {
-    // Build a quick map from lower‑case id → canonical id for lookup
-    const lowerToId = new Map(fullNodes.map(n => [n.id.toLowerCase(), n.id]));
-    const allowedIds = new Set();
-    allowedSet.forEach(name => {
-      const real = lowerToId.get(name.toLowerCase());
-      if (real) allowedIds.add(real);
-    });
-    if (allowedIds.size === 0) return; // nothing matches preset
-
-    nodes = fullNodes.filter(n => allowedIds.has(n.id)).map(d => ({ ...d }));
-    links = fullLinks.filter(l => allowedIds.has(l.source) && allowedIds.has(l.target)).map(d => ({ ...d }));
+    const allowedClean = new Set(Array.from(allowedSet, clean));
+    nodes = fullNodes.filter(n => allowedClean.has(clean(n.id))).map(d => ({ ...d }));
+    const nodeCleanSet = new Set(nodes.map(n => clean(n.id)));
+    links = fullLinks.filter(l => nodeCleanSet.has(clean(l.source)) && nodeCleanSet.has(clean(l.target))).map(d => ({ ...d }));
   }
 
-  if (nodes.length === 0) return; // nothing to draw
+  if (nodes.length === 0) return; // nothing to draw // nothing to draw
 
   // ---- 5c) Restore saved node positions (if any) for *full* graph only ----
   if (includeAll) restoreNodePositions(nodes);
