@@ -76,10 +76,13 @@ const visualMargin = maxdim * 0.025;
 // ---------------------------------------------------------------------------
 // 3) Filter presets (hard‑coded)
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// 3) Filter presets (hard‑coded, case‑insensitive)
+// ---------------------------------------------------------------------------
 const filterSets = {
   all: null,
-  cegm1000: new Set(['probability_density_function','linear_transformation','gaussian_pdf','matrix_multiplication']),
-  cegm2005: new Set(['random_variable','probability_distribution'])
+  cegm1000: new Set(['probability_density_function','linear_transformation','gaussian_pdf','matrix_multiplication'].map(s=>s.toLowerCase())),
+  cegm2005: new Set(['random_variable','probability_distribution'].map(s=>s.toLowerCase()))
 };
 
 // ---------------------------------------------------------------------------
@@ -112,13 +115,18 @@ function buildGraph(allowedSet) {
   graphLayer.selectAll('*').remove();
   hullLayer.selectAll('*').remove();
 
-  // ---- 5b) Filter + (shallow‑)clone nodes/links for D3 ----
-  const nodes = (allowedSet === null)
-    ? fullNodes.map(d => ({ ...d }))
-    : fullNodes.filter(n => allowedSet.has(n.id)).map(d => ({ ...d }));
+    // ---- 5b) Filter + (shallow‑)clone nodes/links for D3 ----
+  const includeAll = (allowedSet === null);
+  const allowedLower = includeAll ? null : allowedSet; // already lower‑cased sets
 
-  const nodeMap = new Map(nodes.map(n => [n.id, n]));
-  const links = (allowedSet === null)
+  const nodes = includeAll
+    ? fullNodes.map(d => ({ ...d }))
+    : fullNodes.filter(n => allowedLower.has(n.id.toLowerCase())).map(d => ({ ...d }));
+
+  const nodeMap = new Map(nodes.map(n => [n.id.toLowerCase(), n]));
+  const links = includeAll
+    ? fullLinks.filter(l => nodeMap.has(l.source.toLowerCase()) && nodeMap.has(l.target.toLowerCase())).map(d => ({ ...d }))
+    : fullLinks.filter(l => allowedLower.has(l.source.toLowerCase()) && allowedLower.has(l.target.toLowerCase())).map(d => ({ ...d })); = (allowedSet === null)
     ? fullLinks.filter(l => nodeMap.has(l.source) && nodeMap.has(l.target)).map(d => ({ ...d }))
     : fullLinks.filter(l => allowedSet.has(l.source) && allowedSet.has(l.target)).map(d => ({ ...d }));
 
