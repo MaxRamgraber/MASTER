@@ -18,9 +18,25 @@
     .node { cursor: pointer; stroke: #fff; stroke-width: 1.5px; }
     .label { font-size: 12px; pointer-events: none; }
     .hull { stroke: #999; stroke-width: 1px; opacity: 0.3; }
+    /* dropdown */
+    #nodeFilter {
+      padding: 4px 6px;
+      font-size: 14px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+    }
   </style>
 </head>
 <body>
+
+<!-- Filter dropdown -->
+<div style="position:absolute;top:10px;left:10px;z-index:10;">
+  <select id="nodeFilter">
+    <option value="all">All</option>
+    <option value="cegm1000">CEGM1000 MUDE</option>
+    <option value="cegm2005">CEGM2005 MORE</option>
+  </select>
+</div>
 
 <svg id="graph"></svg>
 
@@ -161,6 +177,33 @@ loadGraphData(maxdim).then(({ nodes, links }) => {
     .style("font-size", (maxdim*0.01)+"px")
     .attr("dy", d => -d.radius - 5)
     .text(d => d.text);
+
+  // ----------------------------------
+  // 7.5) Filtering logic (dropdown)
+  // ----------------------------------
+  const filterMap = {
+    all: null,
+    cegm1000: new Set(["probability_density_function","linear_transformation","gaussian_pdf","matrix_multiplication"]),
+    cegm2005: new Set(["random_variable","probability_distribution"])
+  };
+
+  d3.select('#nodeFilter').on('change', function() {
+    const val = this.value;
+    const allowed = filterMap[val];
+
+    // Toggle node + label visibility
+    node.style('display', d => (allowed===null || allowed.has(d.id)) ? null : 'none');
+    label.style('display', d => (allowed===null || allowed.has(d.id)) ? null : 'none');
+
+    // Toggle link visibility (only show if both endpoints are visible)
+    link.style('display', l => {
+      if (allowed===null) return null;
+      return (allowed.has(l.source.id) && allowed.has(l.target.id)) ? null : 'none';
+    });
+
+    // Hulls: only show for full graph
+    hullGroup.selectAll('path').style('display', val==='all' ? null : 'none');
+  });
 
   // tick handler updates positions & hulls
   function ticked() {
