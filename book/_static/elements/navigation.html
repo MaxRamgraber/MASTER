@@ -34,7 +34,7 @@
 import { loadGraphData } from './graphData.js';
 
 // ---------------------------------------------------------------------------
-// 1) SVG setup
+// 1) SVG setup
 // ---------------------------------------------------------------------------
 const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
 const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
@@ -43,12 +43,12 @@ const height = vh;
 const maxdim = Math.max(width, height);
 
 const svg = d3.select('#graph').attr('width', width).attr('height', height);
-const rootG       = svg.append('g');
-const hullLayer   = rootG.append('g').attr('class', 'hullLayer');
-const graphLayer  = rootG.append('g');
+const rootG      = svg.append('g');
+const hullLayer  = rootG.append('g').attr('class', 'hullLayer');
+const graphLayer = rootG.append('g');
 
 // ---------------------------------------------------------------------------
-// 2) Zoom (with persistence)
+// 2) Zoom (with persistence)
 // ---------------------------------------------------------------------------
 const zoom = d3.zoom()
   .extent([[0,0],[width,height]])
@@ -76,17 +76,14 @@ const visualMargin = maxdim * 0.025;
 // ---------------------------------------------------------------------------
 // 3) Filter presets (hard‑coded)
 // ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// 3) Filter presets (hard‑coded, case‑insensitive)
-// ---------------------------------------------------------------------------
 const filterSets = {
   all: null,
-  cegm1000: new Set(['probability_density_function','linear_transformation','gaussian_pdf','matrix_multiplication'].map(s=>s.toLowerCase())),
-  cegm2005: new Set(['random_variable','probability_distribution'].map(s=>s.toLowerCase()))
+  cegm1000: new Set(['probability_density_function','linear_transformation','gaussian_pdf','matrix_multiplication']),
+  cegm2005: new Set(['random_variable','probability_distribution'])
 };
 
 // ---------------------------------------------------------------------------
-// 4) Main program
+// 4) Main program
 // ---------------------------------------------------------------------------
 let fullNodes, fullLinks;            // pristine copies from loader (ids only in links)
 let currentSim = null;               // active force simulation
@@ -117,20 +114,35 @@ function buildGraph(allowedSet) {
 
     // ---- 5b) Filter + (shallow‑)clone nodes/links for D3 ----
   const includeAll = (allowedSet === null);
-  const allowedLower = includeAll ? null : allowedSet; // already lower‑cased sets
+  let allowedReal = null;
+  if (!includeAll) {
+    allowedReal = new Set();
+    // Map requested IDs (case‑insensitive) to whatever spelling exists in data
+    fullNodes.forEach(n => {
+      if (allowedSet.has(n.id) || allowedSet.has(n.id.toLowerCase())) {
+        allowedReal.add(n.id);
+      } else {
+        // secondary check: lowercase comparison against preset entries
+        for (const name of allowedSet) {
+          if (name.toLowerCase() === n.id.toLowerCase()) {
+            allowedReal.add(n.id);
+            break;
+          }
+        }
+      }
+    });
+  }
 
   const nodes = includeAll
     ? fullNodes.map(d => ({ ...d }))
-    : fullNodes.filter(n => allowedLower.has(n.id.toLowerCase())).map(d => ({ ...d }));
+    : fullNodes.filter(n => allowedReal.has(n.id)).map(d => ({ ...d }));
 
-  const nodeMap = new Map(nodes.map(n => [n.id.toLowerCase(), n]));
+  const nodeMap = new Map(nodes.map(n => [n.id, n]));
   const links = includeAll
-    ? fullLinks.filter(l => nodeMap.has(l.source.toLowerCase()) && nodeMap.has(l.target.toLowerCase())).map(d => ({ ...d }))
-    : fullLinks.filter(l => allowedLower.has(l.source.toLowerCase()) && allowedLower.has(l.target.toLowerCase())).map(d => ({ ...d })); = (allowedSet === null)
     ? fullLinks.filter(l => nodeMap.has(l.source) && nodeMap.has(l.target)).map(d => ({ ...d }))
-    : fullLinks.filter(l => allowedSet.has(l.source) && allowedSet.has(l.target)).map(d => ({ ...d }));
+    : fullLinks.filter(l => allowedReal.has(l.source) && allowedReal.has(l.target)).map(d => ({ ...d }));
 
-  if (nodes.length === 0) return; // nothing to draw
+  if (nodes.length === 0) return; // nothing to draw // nothing to draw
 
   // ---- 5c) Restore saved node positions (if any) for *full* graph only ----
   if (allowedSet === null) {
@@ -201,56 +213,4 @@ function buildGraph(allowedSet) {
       const pts = [];
       const step = Math.PI/36;
       arr.forEach(d => {
-        for (let a=0;a<2*Math.PI;a+=step) pts.push([d.x+visualMargin*Math.cos(a), d.y+visualMargin*Math.sin(a)]);
-      });
-      const hull = d3.polygonHull(pts);
-      if (hull) hullData.push({ tag, hull });
-    });
-
-    const hullSel = hullLayer.selectAll('path').data(hullData, d=>d.tag);
-    hullSel.enter().append('path')
-      .attr('class', d=>'hull '+d.tag.toLowerCase().replace(/\s+/g,'-'))
-      .merge(hullSel)
-      .attr('d', d=>'M'+d.hull.join('L')+'Z')
-      .style('fill', d=>groupColors[d.tag.toLowerCase()] || '#ccc')
-      .style('opacity', 0.3);
-    hullSel.exit().remove();
-  }
-
-  //-----------------------------------------------------------------------
-  // 5g) Drag handlers
-  //-----------------------------------------------------------------------
-  function dragStarted(event,d) {
-    if (!event.active) currentSim.alphaTarget(0.3).restart();
-    d.fx = d.x; d.fy = d.y;
-  }
-  function dragged(event,d) {
-    d.fx = event.x; d.fy = event.y;
-  }
-  function dragEnded(event,d) {
-    if (!event.active) currentSim.alphaTarget(0);
-    d.fx = null; d.fy = null;
-    if (allowedSet===null) saveNodePositions(nodes);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 6) Persistence helpers (only for full graph)
-// ---------------------------------------------------------------------------
-function saveNodePositions(nodes) {
-  sessionStorage.setItem('nodePositions', JSON.stringify(nodes.map(n => ({ id:n.id,x:n.x,y:n.y,fx:n.fx,fy:n.fy }))));
-}
-function restoreNodePositions(nodes) {
-  const saved = sessionStorage.getItem('nodePositions');
-  if (!saved) return;
-  try {
-    const map = new Map(JSON.parse(saved).map(p => [p.id, p]));
-    nodes.forEach(n => {
-      const p = map.get(n.id);
-      if (p) { n.x=p.x; n.y=p.y; n.fx=p.fx; n.fy=p.fy; }
-    });
-  } catch {}
-}
-</script>
-</body>
-</html>
+        for (let a=0;a<2*Math.PI;a+=step) pts.push([d.x+visualMargin*Math.cos
