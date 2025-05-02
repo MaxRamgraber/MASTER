@@ -2,29 +2,18 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>D3.js Dynamic Graph from References and Tags</title>
+  <title>D3.js Dynamic Graph with Filter Presets</title>
   <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-      font-family: Helvetica, sans-serif;
-    }
-    svg {
-      position: absolute;
-      top: 0;
-      left: 0;
-    }
-    .link { stroke: #999; stroke-opacity: 0.6; stroke-width: 2px; }
-    .node { cursor: pointer; stroke: #fff; stroke-width: 1.5px; }
-    .label { font-size: 12px; pointer-events: none; }
-    .hull { stroke: #999; stroke-width: 1px; opacity: 0.3; }
-    /* dropdown */
-    #nodeFilter {
-      padding: 4px 6px;
-      font-size: 14px;
-      border-radius: 4px;
-      border: 1px solid #ccc;
-    }
+    body { margin:0; overflow:hidden; font-family:Helvetica,Arial,sans-serif; }
+    svg  { position:absolute; top:0; left:0; }
+
+    .link  { stroke:#999; stroke-opacity:.6; stroke-width:2px; }
+    .node  { cursor:pointer; stroke:#fff; stroke-width:1.5px; }
+    .label { font-size:12px; pointer-events:none; }
+    .hull  { stroke:#999; stroke-width:1px; opacity:.3; }
+
+    /* filter dropdown */
+    #nodeFilter { padding:4px 6px; font-size:14px; border-radius:4px; border:1px solid #ccc; }
   </style>
 </head>
 <body>
@@ -41,234 +30,219 @@
 <svg id="graph"></svg>
 
 <script src="https://d3js.org/d3.v7.min.js"></script>
-<!-- All application logic is now an ES‑module so we can import graphData.js -->
 <script type="module">
 import { loadGraphData } from './graphData.js';
 
-// ----------------------------------
-// 1) Setup SVG and container
-// ----------------------------------
+// ---------------------------------------------------------------------------
+// 1) SVG setup
+// ---------------------------------------------------------------------------
 const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
 const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
-const width   = vw;
-const height  = vh;
-const maxdim  = Math.max(width, height);
+const width  = vw;
+const height = vh;
+const maxdim = Math.max(width, height);
 
-const svg = d3.select("#graph")
-  .attr("width",  width)
-  .attr("height", height);
+const svg = d3.select('#graph').attr('width', width).attr('height', height);
+const rootG       = svg.append('g');
+const hullLayer   = rootG.append('g').attr('class', 'hullLayer');
+const graphLayer  = rootG.append('g');
 
-// Containers: one for hulls, one for everything else
-const container  = svg.append("g");
-const hullGroup  = container.append("g").attr("class", "hullLayer");
-const gContainer = container.append("g");
-
-// ----------------------------------
-// 2) Zoom behaviour (with transform persistence)
-// ----------------------------------
+// ---------------------------------------------------------------------------
+// 2) Zoom (with persistence)
+// ---------------------------------------------------------------------------
 const zoom = d3.zoom()
-  .extent([[0, 0], [width, height]])
-  .scaleExtent([0.5, 5])
-  .on("zoom", event => {
-    container.attr("transform", event.transform);
-    sessionStorage.setItem('graphTransform', JSON.stringify(event.transform));
+  .extent([[0,0],[width,height]])
+  .scaleExtent([0.5,5])
+  .on('zoom', e => {
+    rootG.attr('transform', e.transform);
+    sessionStorage.setItem('graphTransform', JSON.stringify(e.transform));
   });
-
-const savedTransform = sessionStorage.getItem('graphTransform');
-
-// ----------------------------------
-// 3) Helper functions + styling data (unchanged)
-// ----------------------------------
-function capitalizeWords(str) {
-  return str.replace(/\b\w/g, char => char.toUpperCase());
-}
-function extractTitle(filename) {
-  return capitalizeWords(filename.replace('.md', '').replace(/_/g, ' '));
+svg.call(zoom);
+const savedT = sessionStorage.getItem('graphTransform');
+if (savedT) {
+  try {
+    const t = JSON.parse(savedT);
+    svg.call(zoom.transform, d3.zoomIdentity.translate(t.x,t.y).scale(t.k));
+  } catch {}
 }
 
-const visualMargin = maxdim * 0.025;
+// colour palette per tag (extend as needed)
 const groupColors = {
-  "linear algebra": "#ff8888",
-  "statistics":     "#88ff88"
-  // extend as needed
+  'linear algebra': '#ff8888',
+  'statistics':      '#88ff88'
+};
+const visualMargin = maxdim * 0.025;
+
+// ---------------------------------------------------------------------------
+// 3) Filter presets (hard‑coded)
+// ---------------------------------------------------------------------------
+const filterSets = {
+  all: null,
+  cegm1000: new Set(['probability_density_function','linear_transformation','gaussian_pdf','matrix_multiplication']),
+  cegm2005: new Set(['random_variable','probability_distribution'])
 };
 
-function computeExpandedHull(groupNodes, margin) {
-  if (groupNodes.length < 3) return null;
-  const step = Math.PI / 36;
-  const pts  = [];
-  groupNodes.forEach(d => {
-    for (let a = 0; a < 2 * Math.PI; a += step) {
-      pts.push([d.x + margin * Math.cos(a), d.y + margin * Math.sin(a)]);
-    }
+// ---------------------------------------------------------------------------
+// 4) Main program
+// ---------------------------------------------------------------------------
+let fullNodes, fullLinks;            // pristine copies from loader (ids only in links)
+let currentSim = null;               // active force simulation
+
+loadGraphData(maxdim).then(({ nodes:rawNodes, links:rawLinks }) => {
+  // Keep deep‑copies that we never mutate so we can rebuild cleanly.
+  fullNodes = rawNodes.map(d => ({ ...d }));
+  fullLinks = rawLinks.map(d => ({ source:d.source, target:d.target }));
+
+  buildGraph(null); // initial full view
+
+  // Filter dropdown handler
+  d3.select('#nodeFilter').on('change', function () {
+    const preset = this.value;           // all | cegm1000 | cegm2005
+    const allowed = filterSets[preset];  // Set or null
+    buildGraph(allowed);
   });
-  return d3.polygonHull(pts);
+}).catch(err => console.error('Failed to load graph data:', err));
+
+// ---------------------------------------------------------------------------
+// 5) Build / rebuild graph (destroys previous render)
+// ---------------------------------------------------------------------------
+function buildGraph(allowedSet) {
+  // ---- 5a) Destroy previous simulation & visuals ----
+  if (currentSim) currentSim.stop();
+  graphLayer.selectAll('*').remove();
+  hullLayer.selectAll('*').remove();
+
+  // ---- 5b) Filter + (shallow‑)clone nodes/links for D3 ----
+  const nodes = (allowedSet === null)
+    ? fullNodes.map(d => ({ ...d }))
+    : fullNodes.filter(n => allowedSet.has(n.id)).map(d => ({ ...d }));
+
+  const nodeMap = new Map(nodes.map(n => [n.id, n]));
+  const links = (allowedSet === null)
+    ? fullLinks.filter(l => nodeMap.has(l.source) && nodeMap.has(l.target)).map(d => ({ ...d }))
+    : fullLinks.filter(l => allowedSet.has(l.source) && allowedSet.has(l.target)).map(d => ({ ...d }));
+
+  if (nodes.length === 0) return; // nothing to draw
+
+  // ---- 5c) Restore saved node positions (if any) for *full* graph only ----
+  if (allowedSet === null) {
+    restoreNodePositions(nodes);
+  }
+
+  // ---- 5d) Create elements ----
+  const linkSel = graphLayer.selectAll('.link')
+    .data(links)
+    .enter().append('line')
+    .attr('class','link');
+
+  const nodeSel = graphLayer.selectAll('.node')
+    .data(nodes, d => d.id)
+    .enter().append('circle')
+    .attr('class', d => 'node'+(d.tag ? ' '+d.tag.toLowerCase().replace(/\s+/g,'-') : ''))
+    .attr('r', d => d.radius)
+    .style('fill', d => d.tag ? (groupColors[d.tag.toLowerCase()] || '#ccc') : '#ccc')
+    .call(d3.drag()
+      .on('start', dragStarted)
+      .on('drag',  dragged)
+      .on('end',   dragEnded))
+    .on('click', (e,d) => { if (d.link) window.open(d.link,'_top'); });
+
+  const labelSel = graphLayer.selectAll('.label')
+    .data(nodes, d => d.id)
+    .enter().append('text')
+    .attr('class','label')
+    .attr('text-anchor','middle')
+    .style('font-size',(maxdim*0.01)+'px')
+    .attr('dy', d => -d.radius - 5)
+    .text(d => d.text);
+
+  // ---- 5e) Force simulation ----
+  currentSim = d3.forceSimulation(nodes)
+    .force('link',   d3.forceLink(links).id(d=>d.id).distance(maxdim*0.1))
+    .force('charge', d3.forceManyBody().strength(-maxdim/2).distanceMax(maxdim*0.25))
+    .force('center', d3.forceCenter(width/2,height/2).strength(0.1))
+    .on('tick', ticked)
+    .on('end', () => { if (allowedSet===null) saveNodePositions(nodes); });
+
+  // For saved positions we want to run a few iterations to settle overlaps
+  if (allowedSet===null) currentSim.alpha(0.3).restart();
+
+  //-----------------------------------------------------------------------
+  // 5f) Tick handler
+  //-----------------------------------------------------------------------
+  function ticked() {
+    linkSel
+      .attr('x1', d=>d.source.x).attr('y1', d=>d.source.y)
+      .attr('x2', d=>d.target.x).attr('y2', d=>d.target.y);
+
+    nodeSel
+      .attr('cx', d=>d.x)
+      .attr('cy', d=>d.y);
+
+    labelSel
+      .attr('x', d=>d.x)
+      .attr('y', d=>d.y);
+
+    // ---- Hulls only for full view (for clarity) ----
+    if (allowedSet !== null) return;
+
+    const groups = d3.group(nodes.filter(n=>n.tag), n=>n.tag);
+    const hullData = [];
+    groups.forEach((arr, tag) => {
+      if (arr.length < 3) return;
+      const pts = [];
+      const step = Math.PI/36;
+      arr.forEach(d => {
+        for (let a=0;a<2*Math.PI;a+=step) pts.push([d.x+visualMargin*Math.cos(a), d.y+visualMargin*Math.sin(a)]);
+      });
+      const hull = d3.polygonHull(pts);
+      if (hull) hullData.push({ tag, hull });
+    });
+
+    const hullSel = hullLayer.selectAll('path').data(hullData, d=>d.tag);
+    hullSel.enter().append('path')
+      .attr('class', d=>'hull '+d.tag.toLowerCase().replace(/\s+/g,'-'))
+      .merge(hullSel)
+      .attr('d', d=>'M'+d.hull.join('L')+'Z')
+      .style('fill', d=>groupColors[d.tag.toLowerCase()] || '#ccc')
+      .style('opacity', 0.3);
+    hullSel.exit().remove();
+  }
+
+  //-----------------------------------------------------------------------
+  // 5g) Drag handlers
+  //-----------------------------------------------------------------------
+  function dragStarted(event,d) {
+    if (!event.active) currentSim.alphaTarget(0.3).restart();
+    d.fx = d.x; d.fy = d.y;
+  }
+  function dragged(event,d) {
+    d.fx = event.x; d.fy = event.y;
+  }
+  function dragEnded(event,d) {
+    if (!event.active) currentSim.alphaTarget(0);
+    d.fx = null; d.fy = null;
+    if (allowedSet===null) saveNodePositions(nodes);
+  }
 }
 
-// ----------------------------------
-// 4) Persist node positions (unchanged)
-// ----------------------------------
+// ---------------------------------------------------------------------------
+// 6) Persistence helpers (only for full graph)
+// ---------------------------------------------------------------------------
 function saveNodePositions(nodes) {
   sessionStorage.setItem('nodePositions', JSON.stringify(nodes.map(n => ({ id:n.id,x:n.x,y:n.y,fx:n.fx,fy:n.fy }))));
 }
 function restoreNodePositions(nodes) {
   const saved = sessionStorage.getItem('nodePositions');
-  if (!saved) return false;
+  if (!saved) return;
   try {
-    const posMap = new Map(JSON.parse(saved).map(p => [p.id, p]));
-    let restored = 0;
+    const map = new Map(JSON.parse(saved).map(p => [p.id, p]));
     nodes.forEach(n => {
-      const p = posMap.get(n.id);
-      if (p) { n.x=p.x; n.y=p.y; n.fx=p.fx; n.fy=p.fy; restored++; }
+      const p = map.get(n.id);
+      if (p) { n.x=p.x; n.y=p.y; n.fx=p.fx; n.fy=p.fy; }
     });
-    return restored > 0;
-  } catch { return false; }
+  } catch {}
 }
-
-// ----------------------------------
-// 5) Fetch + parse references/tags (moved to graphData.js)
-// ----------------------------------
-loadGraphData(maxdim).then(({ nodes, links }) => {
- 
-  // ----------------------------------
-  // 6) Optionally restore positions
-  // ----------------------------------
-  const hadSavedPositions = restoreNodePositions(nodes);
-
-  // Force simulation
-  const simulation = d3.forceSimulation(nodes)
-    .force("link",   d3.forceLink(links).id(d => d.id).distance(maxdim * 0.1))
-    .force("charge", d3.forceManyBody().strength(-maxdim/2).distanceMax(maxdim*0.25))
-    .force("center", d3.forceCenter(width/2, height/2).strength(0.1))
-    .on("tick", ticked)
-    .on("end", () => saveNodePositions(nodes));
-
-  if (hadSavedPositions) simulation.alpha(0.3).restart();
-
-  // ----------------------------------
-  // 7) Draw links, nodes, labels
-  // ----------------------------------
-  const link = gContainer.selectAll(".link")
-    .data(links)
-    .enter().append("line")
-    .attr("class", "link");
-
-  const node = gContainer.selectAll(".node")
-    .data(nodes)
-    .enter().append("circle")
-    .attr("class", d => {
-      let cls = "node";
-      if (d.tag) cls += " " + d.tag.toLowerCase().replace(/\s+/g, '-');
-      return cls;
-    })
-    .attr("r", d => d.radius)
-    .style("fill", d => d.tag ? (groupColors[d.tag.toLowerCase()] || "#ccc") : "#ccc")
-    .call(d3.drag()
-      .on("start", dragStarted)
-      .on("drag", dragged)
-      .on("end",  dragEnded))
-    .on("click", (e,d) => { if (d.link) window.open(d.link, "_top"); });
-
-  const label = gContainer.selectAll(".label")
-    .data(nodes)
-    .enter().append("text")
-    .attr("class", "label")
-    .attr("text-anchor", "middle")
-    .style("font-size", (maxdim*0.01)+"px")
-    .attr("dy", d => -d.radius - 5)
-    .text(d => d.text);
-
-  // ----------------------------------
-  // 7.5) Filtering logic (dropdown)
-  // ----------------------------------
-  const filterMap = {
-    all: null,
-    cegm1000: new Set(["probability_density_function","linear_transformation","gaussian_pdf","matrix_multiplication"]),
-    cegm2005: new Set(["random_variable","probability_distribution"])
-  };
-
-  d3.select('#nodeFilter').on('change', function() {
-    const val = this.value;
-    const allowed = filterMap[val];
-
-    // Toggle node + label visibility
-    node.style('display', d => (allowed===null || allowed.has(d.id)) ? null : 'none');
-    label.style('display', d => (allowed===null || allowed.has(d.id)) ? null : 'none');
-
-    // Toggle link visibility (only show if both endpoints are visible)
-    link.style('display', l => {
-      if (allowed===null) return null;
-      return (allowed.has(l.source.id) && allowed.has(l.target.id)) ? null : 'none';
-    });
-
-    // Hulls: only show for full graph
-    hullGroup.selectAll('path').style('display', val==='all' ? null : 'none');
-  });
-
-  // tick handler updates positions & hulls
-  function ticked() {
-    link
-      .attr("x1", d => d.source.x)
-      .attr("y1", d => d.source.y)
-      .attr("x2", d => d.target.x)
-      .attr("y2", d => d.target.y);
-
-    node
-      .attr("cx", d => d.x)
-      .attr("cy", d => d.y);
-
-    label
-      .attr("x", d => d.x)
-      .attr("y", d => d.y);
-
-    // Hulls per tag
-    const groups = d3.group(nodes.filter(d=>d.tag), d=>d.tag);
-    const hullData = [];
-    groups.forEach((gn, tag) => {
-      if (gn.length >= 3) {
-        const hull = computeExpandedHull(gn, visualMargin);
-        if (hull) hullData.push({ tag, hull });
-      }
-    });
-
-    const hullPaths = hullGroup.selectAll("path").data(hullData, d => d.tag);
-
-    hullPaths.enter().append("path")
-      .attr("class", d => "hull " + d.tag.toLowerCase().replace(/\s+/g,'-'))
-      .merge(hullPaths)
-      .attr("d", d => "M"+d.hull.join("L")+"Z")
-      .style("fill", d => groupColors[d.tag.toLowerCase()] || "#ccc")
-      .style("stroke", "#999")
-      .style("opacity", 0.3);
-
-    hullPaths.exit().remove();
-  }
-
-  // Drag handlers
-  function dragStarted(event,d) {
-    if (!event.active) simulation.alphaTarget(0.3).restart();
-    d.fx = d.x; d.fy = d.y;
-  }
-  function dragged(event,d) { d.fx = event.x; d.fy = event.y; }
-  function dragEnded(event,d) {
-    if (!event.active) simulation.alphaTarget(0);
-    d.fx = null; d.fy = null;
-    saveNodePositions(nodes);
-  }
-
-  // ----------------------------------
-  // 8) Apply stored zoom transform
-  // ----------------------------------
-  svg.call(zoom);
-  if (savedTransform) {
-    try {
-      const t = JSON.parse(savedTransform);
-      svg.call(zoom.transform, d3.zoomIdentity.translate(t.x, t.y).scale(t.k));
-    } catch {}
-  }
-
-}).catch(err => console.error('Failed to load graph data:', err));
-
 </script>
 </body>
 </html>
