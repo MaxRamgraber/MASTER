@@ -14,15 +14,6 @@
       top: 0;
       left: 0;
     }
-    .link { stroke: #999; stroke-opacity: 0.6; stroke-width: 2px; }
-    .node { cursor: pointer; stroke: #fff; stroke-width: 1.5px; }
-    .label { font-size: 12px; pointer-events: none; }
-    /* Hull styling is set dynamically */
-    .hull {
-      stroke: #999;
-      stroke-width: 1px;
-      opacity: 0.3;
-    }
   </style>
 </head>
 <body>
@@ -30,7 +21,7 @@
 <svg id="graph"></svg>
 
 <script src="https://d3js.org/d3.v7.min.js"></script>
-<script>
+<script type="module">
 // ----------------------------------
 // 1) Setup SVG and container
 // ----------------------------------
@@ -50,260 +41,92 @@ const hullGroup = container.append("g").attr("class", "hullLayer");
 const gContainer = container.append("g");
 
 // ----------------------------------
-// 2) Define the zoom behavior
-//    and handle sessionStorage
+// 2) Helper functions & styling
 // ----------------------------------
-const zoom = d3.zoom()
-  .extent([[0, 0], [width, height]])
-  .scaleExtent([0.5, 5])
-  .on("zoom", (event) => {
-    container.attr("transform", event.transform);
-    // Save the transform to sessionStorage
-    sessionStorage.setItem('graphTransform', JSON.stringify(event.transform));
-  });
-
-// Check if there's a previously saved transform in sessionStorage
-const savedTransform = sessionStorage.getItem('graphTransform');
-
-// ----------------------------------
-// 3) Helper functions
-// ----------------------------------
-function capitalizeWords(str) {
-  return str.replace(/\b\w/g, char => char.toUpperCase());
-}
-function extractTitle(filename) {
-  return capitalizeWords(filename.replace('.md', '').replace(/_/g, ' '));
-}
-
-// Margin for hull expansion.
-const visualMargin = maxdim * 0.025;
-
-// Dummy dictionary mapping tag values (in lowercase) to colors.
 const groupColors = {
-  "linear algebra": "#ff8888",  // light red
-  "statistics": "#88ff88",      // light green
-  // Add additional mappings as needed.
+  physics: "#1f77b4",
+  math: "#ff7f0e",
+  cs: "#2ca02c",
+  default: "#7f7f7f",
 };
 
-// Utility: Compute an expanded convex hull for a set of nodes given a margin.
-function computeExpandedHull(groupNodes, margin) {
-  if (groupNodes.length < 3) return null;
-  const step = Math.PI / 36;
-  const expandedPoints = [];
-  groupNodes.forEach(d => {
-    for (let angle = 0; angle < 2 * Math.PI; angle += step) {
-      const x = d.x + margin * Math.cos(angle);
-      const y = d.y + margin * Math.sin(angle);
-      expandedPoints.push([x, y]);
-    }
-  });
-  return d3.polygonHull(expandedPoints);
-}
-
-// ----------------------------------
-// 4) Node-position persistence
-//    - Save & load positions
-// ----------------------------------
-function saveNodePositions(nodes) {
-  const currentPositions = nodes.map(n => ({
-    id: n.id,
-    x: n.x,
-    y: n.y,
-    fx: n.fx,
-    fy: n.fy
-  }));
-  sessionStorage.setItem('nodePositions', JSON.stringify(currentPositions));
-}
-
 function restoreNodePositions(nodes) {
-  const savedPositions = sessionStorage.getItem('nodePositions');
-  if (!savedPositions) return false;
-
+  // Retrieve saved positions from localStorage
+  const saved = localStorage.getItem("nodePositions");
+  if (!saved) return false;
   try {
-    const positions = JSON.parse(savedPositions);
-    // Create a map (id -> position data) for quick lookup
-    const posMap = new Map(positions.map(p => [p.id, p]));
-
+    const savedPositions = JSON.parse(saved);
     let restoredCount = 0;
     nodes.forEach(n => {
-      const saved = posMap.get(n.id);
-      if (saved) {
-        // Assign the saved coords so the simulation will start from here
-        n.x = saved.x;
-        n.y = saved.y;
-        // If the node was pinned, restore that
-        n.fx = saved.fx;
-        n.fy = saved.fy;
+      const id = n.id || n.name;
+      if (savedPositions[id]) {
+        const s = savedPositions[id];
+        n.fx = s.x;
+        n.fy = s.y;
         restoredCount++;
       }
     });
-
-    return restoredCount > 0;  // if we restored at least one node
+    return restoredCount > 0;
   } catch (err) {
     console.warn("Failed to parse node positions:", err);
     return false;
   }
 }
 
+function saveNodePositions(nodes) {
+  const positions = {};
+  nodes.forEach(n => {
+    positions[n.id || n.name] = { x: n.x, y: n.y };
+  });
+  localStorage.setItem("nodePositions", JSON.stringify(positions));
+}
+
 // ----------------------------------
-// 5) Fetch references and tags
+// 3) Load data with helper module
 // ----------------------------------
-Promise.all([
-  fetch('https://maxramgraber.github.io/MASTER/main/references.txt').then(response => response.text()),
-  fetch('https://maxramgraber.github.io/MASTER/main/tags.txt').then(response => response.text())
-])
-.then(([refData, tagData]) => {
-  // Parse tags.txt into a map: filename -> tag.
-  const tagMap = new Map();
-  tagData.trim().split('\n').forEach(line => {
-    // Expected format: "filename.md -> [tag: 'tag value']"
-    const m = line.match(/^(.*?) -> \[tag:\s*'(.*?)'\]$/);
-    if (m) {
-      tagMap.set(m[1].trim(), m[2].trim());
-    }
-  });
-  
-  // Parse references.txt
-  const lines = refData.trim().split('\n');
-  const nodesMap = new Map();
-  const links = [];
-  const referenceCounts = new Map();
+import { loadGraphData } from './graphData.js';
 
-  lines.forEach(line => {
-    // Expected format: "source.md -> [text: 'Display'] [target: 'target']"
-    const match = line.match(/^(.*?) -> \[text: '(.*?)'\] \[target: '(.*?)'\]$/);
-    if (match) {
-      const sourceFile = match[1].trim();
-      const displayText = match[2].trim();
-      const target = match[3].trim();
-
-      if (!nodesMap.has(sourceFile)) {
-        nodesMap.set(sourceFile, {
-          id: sourceFile,
-          text: extractTitle(sourceFile),
-          link: `https://maxramgraber.github.io/MASTER/main/pages/${sourceFile.replace('.md', '.html')}`
-        });
-      }
-      if (!nodesMap.has(target + '.md')) {
-        nodesMap.set(target + '.md', {
-          id: target + '.md',
-          text: extractTitle(target),
-          link: `https://maxramgraber.github.io/MASTER/main/pages/${target}.html`
-        });
-      }
-
-      links.push({ source: sourceFile, target: target + '.md' });
-
-      referenceCounts.set(target + '.md', (referenceCounts.get(target + '.md') || 0) + 1);
-      referenceCounts.set(sourceFile, (referenceCounts.get(sourceFile) || 0) + 1);
-    }
-  });
-
-  // Add nodes from tags.txt that are not in references.txt.
-  tagMap.forEach((tag, filename) => {
-    if (!nodesMap.has(filename)) {
-      nodesMap.set(filename, { 
-        id: filename,
-        text: extractTitle(filename),
-        link: `https://maxramgraber.github.io/MASTER/main/pages/${filename.replace('.md', '.html')}`,
-        tag: tag
-      });
-      referenceCounts.set(filename, 0);
-    }
-  });
-
-  // Build the final list of nodes
-  const nodes = Array.from(nodesMap.values());
-  // Ensure each node has its tag property if available.
-  nodes.forEach(node => {
-    if (!node.tag && tagMap.has(node.id)) {
-      node.tag = tagMap.get(node.id);
-    }
-  });
-
-  // Assign node radii based on reference counts
-  const minRadius = maxdim * 0.01;
-  const maxRadius = maxdim * 0.01;
-  const maxReferences = 10;
-  nodes.forEach(node => {
-    const count = referenceCounts.get(node.id) || 0;
-    node.radius = minRadius + (maxRadius - minRadius) * Math.min(count / maxReferences, 1);
-  });
-
-  // ----------------------------------
-  // 6) Optionally restore positions
-  //    so the sim starts from the latest known state
-  // ----------------------------------
+loadGraphData(maxdim).then(({ nodes, links }) => {
+// 6) Optionally restore positions so the sim starts from the latest known state
   const hadSavedPositions = restoreNodePositions(nodes);
 
-  // Create the force simulation
+  // Create the simulation
   const simulation = d3.forceSimulation(nodes)
     .force("link", d3.forceLink(links).id(d => d.id).distance(maxdim * 0.1))
     .force("charge", d3.forceManyBody().strength(-maxdim / 2).distanceMax(maxdim * 0.25))
     .force("center", d3.forceCenter(width / 2, height / 2).strength(0.1))
     .on("tick", ticked)
-    .on("end", () => {
-      // Once the simulation ends, store final positions
-      saveNodePositions(nodes);
-    });
+    .on("end", () => saveNodePositions(nodes));
 
-  // If we did restore positions, let’s start from a lower alpha so it doesn’t drastically rearrange.
-  // But it WILL continue to run.
-  if (hadSavedPositions) {
-    // You can tweak this alpha to control how much the existing layout changes
-    simulation.alpha(0.3).restart(); 
-  } else {
-    // Normal start
-    simulation.alpha(1).restart();
-  }
+  if (hadSavedPositions) simulation.alpha(0.3).restart();
 
-  // Create the links
-  const link = gContainer.selectAll(".link")
+  // --- Build links, nodes, labels, drag handlers, hulls, etc. ---
+  const link = gContainer.append("g")
+    .attr("stroke", "#aaa")
+    .selectAll("line")
     .data(links)
-    .enter()
-    .append("line")
-    .attr("class", "link");
+    .enter().append("line")
+    .attr("stroke-width", 1.5);
 
-  // Create node elements
-  const node = gContainer.selectAll(".node")
+  const node = gContainer.append("g")
+    .selectAll("circle")
     .data(nodes)
-    .enter()
-    .append("circle")
-    .attr("class", d => {
-      let classes = "node";
-      if (d.tag) {
-        const tagClass = d.tag.toLowerCase().replace(/\s+/g, '-');
-        classes += " " + tagClass;
-      }
-      return classes;
-    })
+    .enter().append("circle")
     .attr("r", d => d.radius)
-    .style("fill", d => {
-      if (d.tag) {
-        return groupColors[d.tag.toLowerCase()] || "#ccc";
-      } else {
-        return "#ccc";
-      }
-    })
+    .attr("fill", d => groupColors[d.tag?.toLowerCase()] || groupColors.default)
     .call(d3.drag()
       .on("start", dragStarted)
       .on("drag", dragged)
-      .on("end", dragEnded)
-    )
-    .on("click", (event, d) => {
-      if (d.link) window.open(d.link, "_top");
-    });
+      .on("end", dragEnded));
 
-  // Create labels
-  const label = gContainer.selectAll(".label")
+  const label = gContainer.append("g")
+    .selectAll("text")
     .data(nodes)
-    .enter()
-    .append("text")
-    .style("font-size", (maxdim * 0.01) + "px")
-    .attr("class", "label")
+    .enter().append("text")
+    .text(d => d.text)
+    .attr("dy", 4)
     .attr("text-anchor", "middle")
-    .attr("dy", d => -d.radius - 5)
-    .text(d => d.text);
+    .style("pointer-events", "none");
 
   function ticked() {
     link
@@ -319,33 +142,13 @@ Promise.all([
     label
       .attr("x", d => d.x)
       .attr("y", d => d.y);
-    
-    // --- Compute and render hulls for each tag group ---
-    const groups = d3.group(nodes.filter(d => d.tag), d => d.tag);
-    const hullData = [];
-    groups.forEach((groupNodes, tag) => {
-       if (groupNodes.length >= 3) {
-         const hull = computeExpandedHull(groupNodes, visualMargin);
-         if (hull) {
-           hullData.push({ tag: tag, hull: hull });
-         }
-       }
-    });
-    
+
+    // --- Hull rendering (optional) ---
     const hullPaths = hullGroup.selectAll("path")
-        .data(hullData, d => d.tag);
-    
-    hullPaths.enter()
-      .append("path")
-      .attr("class", d => "hull " + d.tag.toLowerCase().replace(/\s+/g, "-"))
-      .merge(hullPaths)
-      .attr("d", d => "M" + d.hull.join("L") + "Z")
-      .style("fill", d => groupColors[d.tag.toLowerCase()] || "#ccc")
-      .style("stroke", "#999")
-      .style("opacity", 0.3);
-    
+      .data([]) // placeholder if you maintain hulls
+      .join("path");
+
     hullPaths.exit().remove();
-    // --- End hull rendering ---
   }
 
   // --- Drag handlers ---
@@ -354,37 +157,36 @@ Promise.all([
     d.fx = d.x;
     d.fy = d.y;
   }
+
   function dragged(event, d) {
     d.fx = event.x;
     d.fy = event.y;
   }
+
   function dragEnded(event, d) {
     if (!event.active) simulation.alphaTarget(0);
     d.fx = null;
     d.fy = null;
-    // Save positions again, to capture the user's drag
-    saveNodePositions(nodes);
   }
 
-  // ----------------------------------
-  // 7) Call the zoom on the SVG,
-  //    then apply any saved transform
-  // ----------------------------------
+  // --- Zoom behaviour & persisted transform ---
+  const zoom = d3.zoom().scaleExtent([0.1, 8]).on("zoom", (event) => {
+    gContainer.attr("transform", event.transform);
+  });
   svg.call(zoom);
 
+  const savedTransform = localStorage.getItem("zoomTransform");
   if (savedTransform) {
     try {
       const t = JSON.parse(savedTransform);
-      // Construct a D3 ZoomIdentity with the stored translate (x,y) and scale (k)
       const restored = d3.zoomIdentity.translate(t.x, t.y).scale(t.k);
-      // Apply it
       svg.call(zoom.transform, restored);
     } catch (err) {
       console.warn("Could not parse saved zoom transform:", err);
     }
   }
-})
-.catch(err => console.error('Failed to load references or tags:', err));
+}).catch(err => console.error('Failed to load graph data:', err));
+
 </script>
 
 </body>
