@@ -21,7 +21,7 @@ $$
 F(x) = \int_{-\infty}^{x} p(t) dt.
 $$
 
-Since all {doc}`pdfs <probability_density_function>` must by definition integrate to $1$, and since the output of a cdf is a non-exceedance probability, its output always lies between $0 \leq F(x) \leq 1 \; \forall x$. The *inverse* of a cdf is also often used to sample the associated pdf by drawing a random number from a uniform distribution $Z\sim\mathcal{U}(0,1)$ and mapping it with the inverse cdf $X\sim p(F^{-1}(Z))$.
+Since all {doc}`pdfs <probability_density_function>` must by definition integrate to $1$, and since the output of a cdf is a non-exceedance probability, its output always lies between $0 \leq F(x) \leq 1 \; \forall x$. The *inverse* of a cdf is also often used to {doc}`sample <sampling>` the associated pdf by drawing a random number from a uniform distribution $u\sim\mathcal{U}(0,1)$ and mapping it with the inverse cdf $X\sim p(F^{-1}(Z))$.
 
 ## Intuition
 
@@ -42,7 +42,7 @@ A visual representation of the role of a cdf is provided below. Observe that the
 | $X$ | a specific outcome $X \in x$ |
 | $p(x)$ | probability density function |
 | $F(x)$ | cumulative distribution function |
-| $F^{-1}(x)$ | inverse cumulative distribution function |
+| $F^{-1}(u)$ | inverse cumulative distribution function |
 ```
 
 <div id="sticky-iframe-container" background="white">
