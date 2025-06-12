@@ -55,6 +55,35 @@
         text-orientation: mixed;
         direction: rtl
       }
+
+      /* ---------- controls layout ---------- */
+      .control-wrapper{
+        /* centres the whole controls block in the BL quadrant */
+        display:flex;
+        justify-content:center;
+        align-items:center;
+        height:100%;           /* fill the foreignObject box */
+      }
+
+      .control-grid{
+        /* first row: button + select   second row: slider (spans both) */
+        display:grid;
+        grid-template-columns:auto auto;
+        grid-gap:0.75rem 0.75rem;
+      }
+
+      .control-grid .speed-box{
+        grid-column:1 / span 2;             /* slider row spans both columns */
+        display:inline-flex;
+        align-items:center;
+        gap:0.5rem;
+        width:100%;                         /* same width as row above */
+      }
+
+      .control-grid .speed-box input{
+        flex:1 1 220px;                     /* slider grows to fill row */
+      }
+
     </style>
   </head>
   <body>
@@ -178,28 +207,28 @@
         .text("probability density")
         .style("font-size", (12 * width / 600) + "px");
 
-      // 4. Controls (BL) -------------------------------------------------------------
-      // Embed HTML controls inside foreignObject so they sit in the quadrant
-      const cFO = gBL
-        .append("foreignObject")
-        .attr("x", height / 10)
-        .attr("y", height / 8)
-        .attr("width", halfW - 20)
-        .attr("height", halfH - 20)
+      /* 4. Controls (BL) ------------------------------------------------------------- */
+      const cFO = gBL.append("foreignObject")
+        .attr("x", 0)            // full BL quadrant
+        .attr("y", 0)
+        .attr("width", halfW)
+        .attr("height", halfH);
+
       const controlsDiv = cFO.append("xhtml:div")
-      controlsDiv.html(/*html*/`
-        <button id="resetBtn">Reset</button>
+        .attr("class", "control-wrapper")   // centre everything via flex
+        .html(/*html*/`
+          <div class="control-grid">
+            <button id="resetBtn">Reset</button>
+            <select id="distSelect"></select>
 
-        <!-- distribution picker (keeps #distSelect for JS to find) -->
-        <select id="distSelect"></select>
+            <span class="speed-box">
+              <label for="speedSlider" style="margin:0;">Speed</label>
+              <input id="speedSlider" type="range"
+                    min="1" max="1000" step="1" value="500">
+            </span>
+          </div>
+        `);
 
-        <!-- speed slider with centred label -->
-        <span style="display:inline-flex;align-items:center;gap:0.5rem;">
-          <label for="speedSlider" style="margin:0;">Speed</label>
-          <input id="speedSlider"
-                type="range" min="1" max="1000" step="1" value="500">
-        </span>
-      `);
 
       // populate select
       const selectEl = controlsDiv.select("#distSelect").node()
