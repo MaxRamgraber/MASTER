@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Inverse-CDF Sampler Demo</title>
+    <!-- D3.js -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <!-- jStat for PDF / CDF / Quantile helpers -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jstat/1.9.4/jstat.min.js"></script>
+    <style>
+      body,
+      html {
+        margin: 0;
+        padding: 0;
+        font-family: Helvetica, sans-serif;
+      }
+      button,
+      select,
+      input {
+        font-size: 0.9rem;
+        margin-right: 0.75rem;
+        margin-bottom: 0.5rem;
+      }
+      #click {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        width: 100vw;
+      }
+      svg {
+      }
+      .axis path,
+      .axis line {
+        stroke: #555;
+        stroke-width: 1px;
+        shape-rendering: crispEdges;
+      }
+      .pdf-area {
+        fill: rgba(31, 119, 180, 0.15);
+      } /* blue-ish fill */
+      .cdf-line {
+        stroke: #e15759;
+        stroke-width: 2px;
+        fill: none;
+      } /* red-ish line */
+      .hist-bar {
+        fill: #4e79a7;
+      } /* blue bars */
+      .sample {
+        pointer-events: none;
+      }
+      .uniform-label{
+        writing-mode: vertical-rl;   /* vertical text */
+        text-orientation: mixed;
+        direction: rtl
+      }
+    </style>
+  </head>
+  <body>
+    <div id="click"></div>
+    <script>
+      /* =====================================================================================
+       *  Geometry / Canvas
+       * ===================================================================================*/
+      const vw = Math.max(
+        document.documentElement.clientWidth || 0,
+        window.innerWidth || 0,
+      )
+      const vh = Math.max(
+        document.documentElement.clientHeight || 0,
+        window.innerHeight || 0,
+      )
+      const aspect = 2
+      let width, height
+      if (vw / aspect < vh) {
+        width = vw
+        height = vw / aspect
+      } else {
+        width = vh * aspect
+        height = vh
+      }
+      const halfW = width / 2,
+        halfH = height / 2
+
+      const svg = d3
+        .select("#click")
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height)
+
+      // Quadrant groups ---------------------------------------------------------------
+      const gTL = svg.append("g") // top-left
+      const gTR = svg.append("g").attr("transform", `translate(${halfW},0)`) // top-right
+      const gBL = svg.append("g").attr("transform", `translate(0,${halfH})`) // bottom-left
+      const gBR = svg
+        .append("g")
+        .attr("transform", `translate(${halfW},${halfH})`) // bottom-right
+
+
+      /* =====================================================================================
+       *  Distributions
+       * ===================================================================================*/
+      const DISTS = {
+        normal: {
+          label: "Gaussian (0,1)",
+          domain: [-4, 4],
+          pdf: (x) => jStat.normal.pdf(x, 0, 1),
+          cdf: (x) => jStat.normal.cdf(x, 0, 1),
+          inv: (u) => jStat.normal.inv(u, 0, 1),
+        },
+        exponential: {
+          label: "Exponential (λ=1)",
+          domain: [0, 8],
+          pdf: (x) => jStat.exponential.pdf(x, 1), // rate λ = 1
+          cdf: (x) => jStat.exponential.cdf(x, 1),
+          inv: (u) => jStat.exponential.inv(u, 1),
+        },
+        beta: {
+          label: "Beta (α=2,β=5)",
+          domain: [0, 1],
+          pdf: (x) => jStat.beta.pdf(x, 2, 5),
+          cdf: (x) => jStat.beta.cdf(x, 2, 5),
+          inv: (u) => jStat.beta.inv(u, 2, 5),
+        },
+      }
+      let currentKey = "normal"
+      let dist = DISTS[currentKey]
+
+      /* =====================================================================================
+       *  Scales & Static Elements
+       * ===================================================================================*/
+      // 1. Uniform axis (TL) ----------------------------------------------------------
+      const uniformX = halfW * 0.4 // 40% into TL quadrant
+      const uniformScaleY = d3
+        .scaleLinear()
+        .domain([1, 0])
+        .range([20, halfH - 20])
+      const axisUniform = d3.axisLeft(uniformScaleY).ticks(5)
+
+      const uniformAxis = gTL
+        .append("g")
+        .attr("class", "axis")
+        .attr("transform", `translate(${uniformX},0)`)
+        .call(axisUniform)
+
+      svg.append("text")
+        .attr("transform", "translate(" + (width * 0.1) + "," + (height *0.25) + ") rotate(270)")
+        .style("text-anchor", "middle")
+        .text("uniform random values")
+        .style("font-size", (12 * width / 600) + "px");
+
+
+      // 2. CDF area (TR) -------------------------------------------------------------
+      let xScaleCdf, yScaleCdf, cdfPath
+      svg.append("text")
+        .attr("transform", "translate(" + (width * 0.45) + "," + (height *0.25) + ") rotate(270)")
+        .style("text-anchor", "middle")
+        .text("cumulative probability")
+        .style("font-size", (12 * width / 600) + "px");
+
+      svg.append("text")
+        .attr("transform", "translate(" + (width * 0.475) + "," + (height *0.25) + ") rotate(270)")
+        .style("text-anchor", "middle")
+        .text("F(x) = P(x ≤ X)")
+        .style("font-size", (12 * width / 600) + "px");
+
+      // 3. PDF + Histogram (BR) ------------------------------------------------------
+      let xScalePdf, yScalePdf
+      const histBins = 40 // fixed bin count
+      let histogramData = new Array(histBins).fill(0)
+      let histBars
+      let maxCount = 1
+
+      svg.append("text")
+        .attr("transform", "translate(" + (width * 0.475) + "," + (height *0.75) + ") rotate(270)")
+        .style("text-anchor", "middle")
+        .text("probability density")
+        .style("font-size", (12 * width / 600) + "px");
+
+      // 4. Controls (BL) -------------------------------------------------------------
+      // Embed HTML controls inside foreignObject so they sit in the quadrant
+      const cFO = gBL
+        .append("foreignObject")
+        .attr("x", height / 10)
+        .attr("y", height / 8)
+        .attr("width", halfW - 20)
+        .attr("height", halfH - 20)
+      const controlsDiv = cFO.append("xhtml:div")
+      controlsDiv.html(/*html*/`
+        <button id="resetBtn">Reset</button>
+
+        <!-- distribution picker (keeps #distSelect for JS to find) -->
+        <select id="distSelect"></select>
+
+        <!-- speed slider with centred label -->
+        <span style="display:inline-flex;align-items:center;gap:0.5rem;">
+          <label for="speedSlider" style="margin:0;">Speed</label>
+          <input id="speedSlider"
+                type="range" min="1" max="1000" step="1" value="500">
+        </span>
+      `);
+
+      // populate select
+      const selectEl = controlsDiv.select("#distSelect").node()
+      Object.entries(DISTS).forEach(([k, v]) => {
+        const opt = document.createElement("option")
+        opt.value = k
+        opt.textContent = v.label
+        if (k === currentKey) opt.selected = true
+        selectEl.appendChild(opt)
+      })
+
+      /* =====================================================================================
+       *  Drawing helpers
+       * ===================================================================================*/
+      function drawCdf() {
+        // update scales
+        xScaleCdf = d3
+          .scaleLinear()
+          .domain(dist.domain)
+          .range([20, halfW - 20])
+        yScaleCdf = d3
+          .scaleLinear()
+          .domain([0, 1])
+          .range([halfH - 20, 20])
+
+        // axis
+        gTR.selectAll(".axis").remove()
+        gTR
+          .append("g")
+          .attr("class", "axis")
+          .attr("transform", `translate(0,${halfH - 20})`)
+          .call(d3.axisBottom(xScaleCdf))
+        gTR
+          .append("g")
+          .attr("class", "axis")
+          .attr("transform", `translate(20,0)`)
+          .call(d3.axisLeft(yScaleCdf))
+
+        // cdf path
+        const points = d3.range(0, 201).map((i) => {
+          const x =
+            dist.domain[0] + (i / 200) * (dist.domain[1] - dist.domain[0])
+          return [xScaleCdf(x), yScaleCdf(dist.cdf(x))]
+        })
+        const line = d3.line()
+        if (cdfPath) cdfPath.remove()
+        cdfPath = gTR
+          .append("path")
+          .attr("class", "cdf-line")
+          .attr("d", line(points))
+      }
+
+      function drawPdf() {
+        xScalePdf = xScaleCdf.copy() // share horizontal mapping
+
+        // compute pdf samples
+        const xs = d3
+          .range(0, 201)
+          .map(
+            (i) =>
+              dist.domain[0] + (i / 200) * (dist.domain[1] - dist.domain[0]),
+          )
+        const pdfVals = xs.map(dist.pdf)
+        const maxPdf = d3.max(pdfVals)
+        yScalePdf = d3
+          .scaleLinear()
+          .domain([0, maxPdf])
+          .range([halfH - 20, 20])
+
+        // clear previous
+        gBR.selectAll("*").remove()
+
+        // axes
+        gBR
+          .append("g")
+          .attr("class", "axis")
+          .attr("transform", `translate(0,${halfH - 20})`)
+          .call(d3.axisBottom(xScalePdf))
+        gBR
+          .append("g")
+          .attr("class", "axis")
+          .attr("transform", `translate(20,0)`)
+          .call(d3.axisLeft(yScalePdf))
+
+        // pdf area
+        const area = d3
+          .area()
+          .x((d, i) => xScalePdf(xs[i]))
+          .y0(halfH - 20)
+          .y1((d) => yScalePdf(d))
+        gBR.append("path").attr("class", "pdf-area").attr("d", area(pdfVals))
+
+        // initialise histogram bars container
+        histBars = gBR.append("g")
+        histogramData.fill(0)
+        updateHistogram()
+      }
+
+      function updateHistogram() {
+        const binWidthPx = (halfW - 40) / histBins
+        maxCount = d3.max(histogramData.concat([1]))
+        const yScaleHist = d3
+          .scaleLinear()
+          .domain([0, maxCount])
+          .range([halfH - 20, 20])
+
+        const bars = histBars.selectAll("rect").data(histogramData)
+        bars
+          .enter()
+          .append("rect")
+          .attr("class", "hist-bar")
+          .merge(bars)
+          .attr("x", (d, i) => 20 + i * binWidthPx)
+          .attr("y", (d) => yScaleHist(d))
+          .attr("width", binWidthPx - 1)
+          .attr("height", (d) => halfH - 20 - yScaleHist(d))
+        bars.exit().remove()
+      }
+
+      /* =====================================================================================
+       *  Sampling & Animation
+       * ===================================================================================*/
+      let spawnInterval = 500 // ms (default slider)
+      let spawner // d3.interval handle
+
+      function startSpawner() {
+        if (spawner) spawner.stop()
+        spawner = d3.interval(() => createSample(), spawnInterval)
+      }
+
+      function createSample() {
+        const u = Math.random()
+        const sampleVal = dist.inv(u)
+        // guard for domain clipping (e.g. extremely small/large)
+        if (
+          isNaN(sampleVal) ||
+          sampleVal < dist.domain[0] ||
+          sampleVal > dist.domain[1]
+        )
+          return
+
+        const startX = uniformX
+        const startY = uniformScaleY(u)
+        const bounceX = xScaleCdf(sampleVal) + halfW // absolute coordinate in svg
+        const targetY = halfH + yScalePdf(0) // baseline of pdf/hist quad
+
+        const circ = svg
+          .append("circle")
+          .attr("class", "sample")
+          .attr("cx", startX)
+          .attr("cy", startY)
+          .attr("r", 4)
+          .attr("fill", "#e15759")
+
+        circ
+          .transition()
+          .duration(600)
+          .attr("cx", bounceX)
+          .attr("cy", startY)
+          .transition()
+          .duration(600)
+          .attr("cy", targetY)
+          .on("end", () => {
+            // update histogram
+            const bin = Math.floor(
+              ((sampleVal - dist.domain[0]) /
+                (dist.domain[1] - dist.domain[0])) *
+                histBins,
+            )
+            if (bin >= 0 && bin < histBins) {
+              histogramData[bin] += 1
+              updateHistogram()
+            }
+            circ.remove() // clean up
+          })
+      }
+
+      /* =====================================================================================
+       *  Event listeners
+       * ===================================================================================*/
+      d3.select("#resetBtn").on("click", resetAll)
+
+      d3.select("#distSelect").on("change", function () {
+        currentKey = this.value
+        dist = DISTS[currentKey]
+        resetAll()
+      })
+
+      d3.select("#speedSlider").on("input", function () {
+        spawnInterval = 1001 - this.value
+        startSpawner()
+      })
+
+      function resetAll() {
+        // stop any in-flight dots
+        svg.selectAll(".sample").interrupt().remove()
+        histogramData.fill(0)
+        drawCdf()
+        drawPdf()
+        updateHistogram()
+      }
+
+      /* =====================================================================================
+       *  Initial render & kick-off
+       * ===================================================================================*/
+      drawCdf()
+      drawPdf()
+      startSpawner()
+
+      // Responsive resize ------------------------------------------------------------
+      window.addEventListener("resize", () => location.reload())
+    </script>
+  </body>
+</html>

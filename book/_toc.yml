@@ -13,6 +13,7 @@ parts:
     - file: pages/probability_density_function.md
     - file: pages/probability_distribution.md
     - file: pages/random_variable.md
+    - file: pages/sampling.md
     - file: references.md
     - file: changelog.md
     - file: credits.md
