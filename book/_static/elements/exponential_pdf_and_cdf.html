@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <script src="https://unpkg.com/mathjs/lib/browser/math.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/3.5.17/d3.min.js"></script>
+    <script src="https://d3js.org/d3.v4.min.js"></script>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        font-family: Helvetica, sans-serif;
+      }
+      .tickLabel {
+        position: absolute;
+        transform: translateX(-50%);
+        pointer-events: none;
+      }
+      .sliderLabel {
+        position: absolute;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+
+    <div id="my_datavisualization">
+      <svg id="click" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+
+    <script>
+      // Viewport & SVG sizing
+      const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0) * 0.95;
+      const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0) * 0.95;
+      const aspect = 1.5;
+      let width, height;
+      if (vw / aspect < vh) { width = vw; height = vw / aspect; } else { width = vh * aspect; height = vh; }
+
+      var svg = d3.select('#click').attr('width', width).attr('height', height);
+
+      // Slider UI scaling
+      const uiScale = height / 600;
+      const trackH  = 15 * uiScale;
+      const thumbSz = 25 * uiScale;
+
+      let styleEl = document.getElementById('sliderDynCSS');
+      if (!styleEl) {
+        styleEl = document.createElement('style');
+        styleEl.id = 'sliderDynCSS';
+        document.head.appendChild(styleEl);
+      }
+
+      styleEl.textContent = `
+      input[type=range]{
+        -webkit-appearance: none;
+        appearance: none;
+        width: auto;
+        height: ${trackH}px;
+        background: transparent;
+        margin: 0;
+        padding: 0;
+      }
+      input[type=range]::-webkit-slider-runnable-track{
+        height: ${trackH}px;
+        background: #ccc;
+        border-radius: ${trackH/2}px;
+      }
+      input[type=range]::-webkit-slider-thumb{
+        -webkit-appearance: none;
+        appearance: none;
+        width: ${thumbSz}px;
+        height: ${thumbSz}px;
+        border-radius: 50%;
+        background: #666;
+        margin-top: calc(${trackH}px / 2 - ${thumbSz}px / 2);
+      }
+      input[type=range]::-moz-range-track{
+        height: ${trackH}px;
+        background: #ccc;
+        border-radius: ${trackH/2}px;
+      }
+      input[type=range]::-moz-range-thumb{
+        width: ${thumbSz}px;
+        height: ${thumbSz}px;
+        border-radius: 50%;
+        background: #666;
+        border: none;
+      }
+      input[type=range]::-ms-track{
+        height: ${trackH}px;
+        background: transparent;
+        border-color: transparent;
+        color: transparent;
+      }
+      input[type=range]::-ms-fill-lower{
+        background: #ccc;
+        border-radius: ${trackH/2}px;
+      }
+      input[type=range]::-ms-fill-upper{
+        background: #ccc;
+        border-radius: ${trackH/2}px;
+      }
+      input[type=range]::-ms-thumb{
+        width: ${thumbSz}px;
+        height: ${thumbSz}px;
+        border-radius: 50%;
+        background: #666;
+        border: none;
+      }
+      `;
+
+      // Parameters for exponential distribution with rate (lambda), location (Loc), and scale
+      var Lambda = 1;   // rate > 0
+      var Loc = 0;      // shift
+      var Scale = 1;    // stretch > 0
+
+      function linspace(start, end, resolution) {
+        var spacing = [];
+        for (var i = 0; i < resolution; i++) spacing.push(start + (end - start) * i / (resolution - 1));
+        return spacing;
+      }
+
+      function expPDF(x) {
+        if (x < Loc) return 0;
+        return (Lambda / Scale) * Math.exp(-Lambda * (x - Loc) / Scale);
+      }
+
+      function expCDF(x) {
+        if (x < Loc) return 0;
+        return 1 - Math.exp(-Lambda * (x - Loc) / Scale);
+      }
+
+      function evaluate_pdf(arr) {
+        var out = [];
+        for (let i = 0; i < arr.length; i++) out.push(expPDF(arr[i]));
+        return out;
+      }
+
+      function evaluate_cdf(arr) {
+        var out = [];
+        for (let i = 0; i < arr.length; i++) out.push(expCDF(arr[i]));
+        return out;
+      }
+
+      // Plot windows
+      const window_x_pdf = [width * 0.1,  width * 0.45];
+      const window_y_pdf = [height * 0.1, height * 0.6];
+      const window_x_cdf = [width * 0.6, width * 0.95];
+      const window_y_cdf = [height * 0.1, height * 0.6];
+
+      // Scales (domains update with Loc/Scale)
+      const xScale_pdf = d3.scaleLinear().domain([Loc, Loc + 5 * Scale]).range(window_x_pdf);
+      const yScale_pdf = d3.scaleLinear().domain([0, 1]).range([window_y_pdf[1], window_y_pdf[0]]);
+
+      const xScale_cdf = d3.scaleLinear().domain([Loc, Loc + 5 * Scale]).range(window_x_cdf);
+      const yScale_cdf = d3.scaleLinear().domain([0, 1]).range([window_y_cdf[1], window_y_cdf[0]]);
+
+      var xAxis_pdf = d3.axisBottom(xScale_pdf).ticks(5);
+      var yAxis_pdf = d3.axisLeft(yScale_pdf);
+      var xAxis_cdf = d3.axisBottom(xScale_cdf).ticks(5);
+      var yAxis_cdf = d3.axisLeft(yScale_cdf);
+
+      var tickFontSize = (12 * width / 600) + 'px';
+
+      var xaxis_pdf = svg.append('g')
+        .attr('transform', 'translate(0,' + window_y_pdf[1] + ')')
+        .call(xAxis_pdf)
+        .style('font-size', tickFontSize);
+
+      svg.append('text')
+        .attr('transform', 'translate(' + ((window_x_pdf[0] + window_x_pdf[1]) / 2) + ',' + (height * 0.675) + ')')
+        .style('text-anchor', 'middle')
+        .text('x')
+        .style('font-size', tickFontSize);
+
+      var yaxis_pdf = svg.append('g')
+        .attr('transform', 'translate(' + window_x_pdf[0] + ',0)')
+        .call(yAxis_pdf)
+        .style('font-size', tickFontSize);
+
+      svg.append('text')
+        .attr('transform', 'translate(' + (width * 0.05) + ',' + ((window_y_pdf[0] + window_y_pdf[1]) / 2) + ') rotate(270)')
+        .style('text-anchor', 'middle')
+        .text('probability density')
+        .style('font-size', tickFontSize);
+
+      var xaxis_cdf = svg.append('g')
+        .attr('transform', 'translate(0,' + window_y_cdf[1] + ')')
+        .call(xAxis_cdf)
+        .style('font-size', tickFontSize);
+
+      svg.append('text')
+        .attr('transform', 'translate(' + ((window_x_cdf[0] + window_x_cdf[1]) / 2) + ',' + (height * 0.675) + ')')
+        .style('text-anchor', 'middle')
+        .text('x')
+        .style('font-size', tickFontSize);
+
+      var yaxis_cdf = svg.append('g')
+        .attr('transform', 'translate(' + window_x_cdf[0] + ',0)')
+        .call(yAxis_cdf)
+        .style('font-size', tickFontSize);
+
+      svg.append('text')
+        .attr('transform', 'translate(' + (width * 0.55) + ',' + ((window_y_cdf[0] + window_y_cdf[1]) / 2) + ') rotate(270)')
+        .style('text-anchor', 'middle')
+        .text('cumulative probability')
+        .style('font-size', tickFontSize);
+
+      // Initial data
+      var N = 401;
+      var xVals = linspace(Loc, Loc + 5 * Scale, N);
+      var pdfVals = evaluate_pdf(xVals);
+      var cdfVals = evaluate_cdf(xVals);
+
+      var data_pdf = xVals.map((xi,i)=>({x:xi,y:pdfVals[i]}));
+      var data_cdf = xVals.map((xi,i)=>({x:xi,y:cdfVals[i]}));
+
+      var valueline_pdf = d3.svg.line().x(d=>xScale_pdf(d.x)).y(d=>yScale_pdf(d.y));
+      var valueline_cdf = d3.svg.line().x(d=>xScale_cdf(d.x)).y(d=>yScale_cdf(d.y));
+
+      svg.append('path')
+        .attr('class','line')
+        .attr('d', valueline_pdf(data_pdf))
+        .attr('fill','none')
+        .attr('stroke-width', 3 * height / 600)
+        .attr('stroke','#666666')
+        .attr('id','line_pdf');
+
+      svg.append('path')
+        .attr('class','line')
+        .attr('d', valueline_cdf(data_cdf))
+        .attr('fill','none')
+        .attr('stroke-width', 3 * height / 600)
+        .attr('stroke','#666666')
+        .attr('id','line_cdf');
+
+      function updatePlots(duration = 300){
+        var xVals = linspace(Loc, Loc + 5 * Scale, N);
+        var pdfVals = evaluate_pdf(xVals);
+        var cdfVals = evaluate_cdf(xVals);
+
+        var data_pdf = xVals.map((xi,i)=>({x:xi,y:pdfVals[i]}));
+        var data_cdf = xVals.map((xi,i)=>({x:xi,y:cdfVals[i]}));
+
+        var maxval = d3.max(pdfVals); if (isNaN(maxval) || maxval < 1) maxval = 1;
+        yScale_pdf.domain([0, maxval * 1.2]);
+
+        xScale_pdf.domain([Loc, Loc + 5 * Scale]);
+        xScale_cdf.domain([Loc, Loc + 5 * Scale]);
+
+        d3.select('#line_pdf')
+          .transition().duration(duration)
+          .attr('d', valueline_pdf(data_pdf));
+        d3.select('#line_cdf')
+          .transition().duration(duration)
+          .attr('d', valueline_cdf(data_cdf));
+
+        yaxis_pdf.transition().duration(300).call(d3.axisLeft(yScale_pdf));
+        xaxis_pdf.transition().duration(300).call(d3.axisBottom(xScale_pdf).ticks(5));
+
+        yaxis_cdf.transition().duration(300).call(d3.axisLeft(yScale_cdf));
+        xaxis_cdf.transition().duration(300).call(d3.axisBottom(xScale_cdf).ticks(5));
+      }
+
+      // Lambda slider (left, replaces alpha)
+      svg.append('text')
+        .attr('transform', 'translate(' + ((window_x_pdf[0] + window_x_pdf[1]) / 2) + ',' + (height * 0.75) + ')')
+        .style('text-anchor', 'middle')
+        .text('λ')
+        .style('font-size', tickFontSize);
+
+      var lambdaSlider = document.createElement('input');
+      lambdaSlider.type = 'range';
+      lambdaSlider.id   = 'lambdaSlider';
+      lambdaSlider.min  = 0.1;
+      lambdaSlider.max  = 5;
+      lambdaSlider.step = 0.01;
+      lambdaSlider.value = Lambda;
+      lambdaSlider.style.position = 'absolute';
+      lambdaSlider.style.left = (width * 0.1) + 'px';
+      lambdaSlider.style.top  = (height * 0.775) + 'px';
+      lambdaSlider.style.width = (width * 0.35) + 'px';
+      lambdaSlider.style.margin = '0';
+      lambdaSlider.style.padding = '0';
+      document.body.appendChild(lambdaSlider);
+
+      [0.1, 1, 2, 3, 4, 5].forEach(function(v){
+        var pct = (v - 0.1) / (5 - 0.1);
+        svg.append('text')
+          .attr('transform', 'translate(' + ((width * 0.1) + pct * (width * 0.35)) + ',' + (height * 0.835) + ')')
+          .style('text-anchor', 'middle')
+          .text(v)
+          .style('font-size', tickFontSize);
+      });
+
+      lambdaSlider.addEventListener('input', function(){
+        Lambda = +this.value;
+        if (Lambda <= 0) Lambda = 0.1;
+        updatePlots(0);
+      });
+
+      // Location slider (right top)
+      svg.append('text')
+        .attr('transform', 'translate(' + ((window_x_cdf[0] + window_x_cdf[1]) / 2) + ',' + (height * 0.75) + ')')
+        .style('text-anchor', 'middle')
+        .text('location')
+        .style('font-size', tickFontSize);
+
+      var locSlider = document.createElement('input');
+      locSlider.type = 'range';
+      locSlider.id   = 'locSlider';
+      locSlider.min  = -10;
+      locSlider.max  = 10;
+      locSlider.step = 0.01;
+      locSlider.value = Loc;
+      locSlider.style.position = 'absolute';
+      locSlider.style.left = window_x_cdf[0] + 'px';
+      locSlider.style.top  = (height * 0.775) + 'px';
+      locSlider.style.width = (window_x_cdf[1] - window_x_cdf[0]) + 'px';
+      locSlider.style.margin = '0';
+      locSlider.style.padding = '0';
+      document.body.appendChild(locSlider);
+
+      [-10, -5, 0, 5, 10].forEach(function(v){
+        var pct = (v + 10) / 20;
+        svg.append('text')
+          .attr('transform', 'translate(' + (window_x_cdf[0] + pct * (window_x_cdf[1] - window_x_cdf[0])) + ',' + (height * 0.835) + ')')
+          .style('text-anchor', 'middle')
+          .text(v)
+          .style('font-size', tickFontSize);
+      });
+
+      locSlider.addEventListener('input', function(){
+        Loc = +this.value;
+        updatePlots(0);
+      });
+
+      // Scale slider (right bottom)
+      svg.append('text')
+        .attr('transform', 'translate(' + ((window_x_cdf[0] + window_x_cdf[1]) / 2) + ',' + (height * 0.8975) + ')')
+        .style('text-anchor', 'middle')
+        .text('scale')
+        .style('font-size', tickFontSize);
+
+      var scaleSlider = document.createElement('input');
+      scaleSlider.type = 'range';
+      scaleSlider.id   = 'scaleSlider';
+      scaleSlider.min  = 0.1;
+      scaleSlider.max  = 5;
+      scaleSlider.step = 0.01;
+      scaleSlider.value = Scale;
+      scaleSlider.style.position = 'absolute';
+      scaleSlider.style.left = window_x_cdf[0] + 'px';
+      scaleSlider.style.top  = (height * 0.925) + 'px';
+      scaleSlider.style.width = (window_x_cdf[1] - window_x_cdf[0]) + 'px';
+      scaleSlider.style.margin = '0';
+      scaleSlider.style.padding = '0';
+      document.body.appendChild(scaleSlider);
+
+      [0.1, 1, 2, 3, 4, 5].forEach(function(v){
+        var pct = (v - 0.1) / (5 - 0.1);
+        svg.append('text')
+          .attr('transform', 'translate(' + (window_x_cdf[0] + pct * (window_x_cdf[1] - window_x_cdf[0])) + ',' + (height * 0.985) + ')')
+          .style('text-anchor', 'middle')
+          .text(v)
+          .style('font-size', tickFontSize);
+      });
+
+      scaleSlider.addEventListener('input', function(){
+        Scale = +this.value;
+        if (Scale <= 0) Scale = 0.1;
+        updatePlots(0);
+      });
+
+      updatePlots();
+
+    </script>
+  </body>
+</html>
