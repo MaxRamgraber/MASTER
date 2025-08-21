@@ -1,6 +1,6 @@
 (summary)=
 
-# Gaussian pfd
+# Gaussian pdf
 
 **Summary.** A Gaussian pdf (also known as a *normal pdf*) is a common type of {doc}`probability density function <probability_density_function>`.
 

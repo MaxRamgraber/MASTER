@@ -7,6 +7,7 @@ parts:
     - file: pages/beta_pdf.md
     - file: pages/Gaussian_pdf.md
     - file: pages/cumulative_distribution_function.md
+    - file: pages/KS_test.md
     - file: pages/linear_regression.md
     - file: pages/linear_transformation.md
     - file: pages/matrix_multiplication.md
